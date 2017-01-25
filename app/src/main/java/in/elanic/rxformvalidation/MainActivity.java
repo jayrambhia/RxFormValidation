@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import butterknife.Bind;
 import butterknife.ButterKnife;
 import rx.Observable;
+import rx.Subscriber;
 import rx.Subscription;
 import rx.android.schedulers.AndroidSchedulers;
 import rx.functions.Action1;
@@ -45,13 +46,15 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         ButterKnife.bind(this);
         availabilityChecker = new RandomAvailabilityChecker();
-        setupObservables4();
+        setupObservables5();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        _subscription.unsubscribe();
+        if (_subscription != null) {
+            _subscription.unsubscribe();
+        }
 
         if (emailSubject != null) {
             emailSubject.onCompleted();
@@ -436,6 +439,99 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private void setupObservables5() {
+
+        final PublishSubject<Observable<ValidationResult<String>>> emailSubject = PublishSubject.create();
+
+        emailSubject.subscribe(new Action1<Observable<ValidationResult<String>>>() {
+            @Override
+            public void call(Observable<ValidationResult<String>> validationResultObservable) {
+                Log.d(TAG, "emailsubject subscriber. New call");
+            }
+        });
+
+        final Observable<ValidationResult<String>> emailApiObservable = Observable.switchOnNext(emailSubject);
+
+        RxHelper.getTextWatcherObservable(emailView)
+                .debounce(800, TimeUnit.MILLISECONDS)
+                .doOnNext(new Action1<String>() {
+                    @Override
+                    public void call(String s) {
+                        Log.d(TAG, "start email validation: " + s);
+                    }
+                })
+                .map(new Func1<String, ValidationResult<String>>() {
+                    @Override
+                    public ValidationResult<String> call(String s) {
+                        return validateEmail(s);
+                    }
+                })
+                .doOnNext(new Action1<ValidationResult<String>>() {
+                    @Override
+                    public void call(ValidationResult<String> result) {
+                        Log.d(TAG, "regex validation done: " + result.getData() + ", " + result.isValid() + ", " + result.getReason());
+                    }
+                })
+                .flatMap(new Func1<ValidationResult<String>, Observable<ValidationResult<String>>>() {
+                    @Override
+                    public Observable<ValidationResult<String>> call(ValidationResult<String> result) {
+                        if (!result.isValid()) {
+                            Log.e(TAG, "email pattern validation failed: " + result.getData() + ", " + result.getReason());
+                            return Observable.just(result);
+                        }
+
+                        Log.d(TAG, "calling API call via onNext on emailSubject: " + result.getData());
+                        emailSubject.onNext(availabilityChecker.isEmailAvailable(result.getData()));
+//                        return Observable.switchOnNext(emailSubject);
+                        return emailApiObservable;
+                    }
+                })
+                .doOnNext(new Action1<ValidationResult<String>>() {
+                    @Override
+                    public void call(ValidationResult<String> result) {
+                        Log.d(TAG, "Got API validation result for: " + result.getData());
+                    }
+                })
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Action1<ValidationResult<String>>() {
+                    @Override
+                    public void call(ValidationResult<String> result) {
+                        Log.d(TAG, "email validation result: " + result.getData() + ", " + result.isValid() + ", " + result.getReason());
+                        emailView.setError(result.getReason());
+                    }
+                });
+
+
+        /*RxHelper.getTextWatcherObservable(emailView)
+                .map(new Func1<String, String>() {
+                    @Override
+                    public String call(String s) {
+                        cancelEmailApiCall();
+                        return s;
+                    }
+                })
+                .debounce(800, TimeUnit.MILLISECONDS)
+                .flatMap(new Func1<String, Observable<ValidationResult<String>>>() {
+                    @Override
+                    public Observable<ValidationResult<String>> call(String s) {
+                        ValidationResult<String> result = validateEmail(s);
+                        if (!result.isValid()) {
+                            return Observable.just(result);
+                        }
+
+                        return callApiToValidateEmail2(result.getData());
+                    }
+                })
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(new Action1<ValidationResult<String>>() {
+                    @Override
+                    public void call(ValidationResult<String> result) {
+
+                    }
+                });
+*/
+    }
+
     private ValidationResult<String> validateEmail(@NonNull String email) {
         return ValidationUtils.isValidEmailAddress(email);
     }
@@ -464,6 +560,33 @@ public class MainActivity extends AppCompatActivity {
             emailApiSubscription = null;
         }
     }
+
+    private Observable<ValidationResult<String>> callApiToValidateEmail2(@NonNull String email) {
+        cancelEmailApiCall();
+
+        Observable<ValidationResult<String>> observable = availabilityChecker.isEmailAvailable(email)
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread());
+
+        emailApiSubscription = observable.subscribe(new Action1<ValidationResult<String>>() {
+            @Override
+            public void call(ValidationResult<String> result) {
+                emailView.setError(result.getReason());
+                emailSubject.onNext(result.isValid());
+            }
+        });
+
+        return observable;
+    }
+
+    /*private Observable<Observable<ValidationResult<String>>> getEmailApiObservable() {
+        return Observable.create(new Observable.OnSubscribe<Observable<ValidationResult<String>>>() {
+            @Override
+            public void call(Subscriber<? super Observable<ValidationResult<String>>> subscriber) {
+                subscriber.onNext(availabilityChecker.isEmailAvailable(""));
+            }
+        });
+    }*/
 
     private void callApiToValidateEmail(@NonNull String email) {
         cancelEmailApiCall();

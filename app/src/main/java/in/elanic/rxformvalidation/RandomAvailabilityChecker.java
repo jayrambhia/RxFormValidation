@@ -26,6 +26,7 @@ public class RandomAvailabilityChecker implements AvailabilityChecker {
         return Observable.defer(new Func0<Observable<ValidationResult<String>>>() {
             @Override
             public Observable<ValidationResult<String>> call() {
+                Log.d(TAG, "validate email api call: " + email);
                 return Observable.just(isEmailAvailableSync(email));
             }
         }).delay(1200, TimeUnit.MILLISECONDS);
